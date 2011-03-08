@@ -1,249 +1,128 @@
-%define pid_dir %{_localstatedir}/run/redis
-%define pid_file %{pid_dir}/redis.pid
+# Check for status of man pages
+# http://code.google.com/p/redis/issues/detail?id=202
 
-Summary: redis
-Name: redis
-Version: 2.0.0
-Release: rc2
-License: BSD
-Group: Applications/Multimedia
-URL: http://code.google.com/p/redis/
+Name:             redis
+Version:          2.2.2
+Release:          1%{?dist}
+Summary:          A persistent key-value database
 
-Source0: redis-%{version}-%{release}.tar.gz
-Source1: redis.conf
+Group:            Applications/Databases
+License:          BSD
+URL:              http://code.google.com/p/redis/
+Source0:          http://redis.googlecode.com/files/%{name}-%{version}.tar.gz
+Source1:          %{name}.logrotate
+Source2:          %{name}.init
+Source3:          %{name}.conf
+# Update configuration for Fedora
+#Patch0:           %{name}-2.0.0-redis.conf.patch
 
-BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
-BuildRequires: gcc, make
-Requires(post): /sbin/chkconfig /usr/sbin/useradd
-Requires(preun): /sbin/chkconfig, /sbin/service
-Requires(postun): /sbin/service
-Provides: redis
+#%if !0%{?el5}
+#BuildRequires:    tcl >= 8.5
+#%endif
 
-Packager: Jason Priebe <jpriebe@cbcnewmedia.com>
+Requires:         logrotate
+Requires(post):   chkconfig
+Requires(postun): initscripts
+Requires(pre):    shadow-utils
+Requires(preun):  chkconfig
+Requires(preun):  initscripts
 
 %description
-Redis is a key-value database. It is similar to memcached but the dataset is
-not volatile, and values can be strings, exactly like in memcached, but also
-lists and sets with atomic operations to push/pop elements.
-
-In order to be very fast but at the same time persistent the whole dataset is
-taken in memory and from time to time and/or when a number of changes to the
-dataset are performed it is written asynchronously on disk. You may lose the
-last few queries that is acceptable in many applications but it is as fast
-as an in memory DB (beta 6 of Redis includes initial support for master-slave
-replication in order to solve this problem by redundancy).
-
-Compression and other interesting features are a work in progress. Redis is
-written in ANSI C and works in most POSIX systems like Linux, *BSD, Mac OS X,
-and so on. Redis is free software released under the very liberal BSD license.
-
+Redis is an advanced key-value store. It is similar to memcached but the data
+set is not volatile, and values can be strings, exactly like in memcached, but
+also lists, sets, and ordered sets. All this data types can be manipulated with
+atomic operations to push/pop elements, add/remove elements, perform server side
+union, intersection, difference between sets, and so forth. Redis supports
+different kind of sorting abilities.
 
 %prep
-%setup
-
-%{__cat} <<EOF >redis.logrotate
-%{_localstatedir}/log/redis/*log {
-    missingok
-}
-EOF
-
-%{__cat} <<'EOF' >redis.sysv
-#!/bin/bash
-#
-# Init file for redis
-#
-# Written by Jason Priebe <jpriebe@cbcnewmedia.com>
-#
-# chkconfig: - 80 12
-# description: A persistent key-value database with network interface
-# processname: redis-server
-# config: /etc/redis.conf
-# pidfile: %{pidfile}
-
-source %{_sysconfdir}/init.d/functions
-
-RETVAL=0
-prog="redis-server"
-
-start() {
-  echo -n $"Starting $prog: "
-  daemon --user redis --pidfile %{pid_file} %{_sbindir}/$prog /etc/redis.conf
-  RETVAL=$?
-  echo
-  [ $RETVAL -eq 0 ] && touch %{_localstatedir}/lock/subsys/$prog
-  return $RETVAL
-}
-
-stop() {
-    PID=`cat %{pid_file} 2>/dev/null`
-    if [ -n "$PID" ]; then
-        echo "Shutdown may take a while; redis needs to save the entire database";
-        echo -n $"Shutting down $prog: "
-        /usr/bin/redis-cli shutdown
-        if checkpid $PID 2>&1; then
-            echo_failure
-            RETVAL=1
-        else
-            rm -f /var/lib/redis/temp*rdb
-            rm -f /var/lock/subsys/$prog
-            echo_success
-            RETVAL=0
-        fi
-    else
-        echo -n $"$prog is not running"
-        echo_failure
-        RETVAL=1
-    fi
-
-    echo
-    return $RETVAL
-}
-
-restart() {
-  stop
-  start
-}
-
-condrestart() {
-    [-e /var/lock/subsys/$prog] && restart || :
-}
-
-case "$1" in
-  start)
-  start
-  ;;
-  stop)
-  stop
-  ;;
-  status)
-  status -p %{pid_file} $prog
-  RETVAL=$?
-  ;;
-  restart)
-  restart
-  ;;
-  condrestart|try-restart)
-  condrestart
-  ;;
-   *)
-  echo $"Usage: $0 {start|stop|status|restart|condrestart}"
-  RETVAL=1
-esac
-
-exit $RETVAL
-EOF
-
+%setup -q
+#%patch0 -p1
+# Remove integration tests
+#sed -i '/    execute_tests "integration\/replication"/d' tests/test_helper.tcl
+#sed -i '/    execute_tests "integration\/aof"/d' tests/test_helper.tcl
 
 %build
-%{__make}
+make %{?_smp_mflags} DEBUG="" CFLAGS='%{optflags} -std=c99' all
+
+%check
+#%if !0%{?el5}
+#tclsh tests/test_helper.tcl
+#%endif
 
 %install
-%{__rm} -rf %{buildroot}
-mkdir -p %{buildroot}%{_bindir}
-%{__install} -Dp -m 0755 redis-server %{buildroot}%{_sbindir}/redis-server
-%{__install} -Dp -m 0755 redis-benchmark %{buildroot}%{_bindir}/redis-benchmark
-%{__install} -Dp -m 0755 redis-cli %{buildroot}%{_bindir}/redis-cli
-
-%{__install} -Dp -m 0755 redis.logrotate %{buildroot}%{_sysconfdir}/logrotate.d/redis
-%{__install} -Dp -m 0755 redis.sysv %{buildroot}%{_sysconfdir}/init.d/redis
-%{__install} -Dp -m 0644 %{SOURCE1} %{buildroot}%{_sysconfdir}/redis.conf
-%{__install} -p -d -m 0755 %{buildroot}%{_localstatedir}/lib/redis
-%{__install} -p -d -m 0755 %{buildroot}%{_localstatedir}/log/redis
-%{__install} -p -d -m 0755 %{buildroot}%{pid_dir}
-
-%pre
-/usr/sbin/useradd -c 'Redis' -u 499 -s /bin/false -r -d %{_localstatedir}/lib/redis redis 2> /dev/null || :
-
-%preun
-if [ $1 = 0 ]; then
-    # make sure redis service is not running before uninstalling
-
-    # when the preun section is run, we've got stdin attached.  If we
-    # call stop() in the redis init script, it will pass stdin along to
-    # the redis-cli script; this will cause redis-cli to read an extraneous
-    # argument, and the redis-cli shutdown will fail due to the wrong number
-    # of arguments.  So we do this little bit of magic to reconnect stdin
-    # to the terminal
-    term="/dev/$(ps -p$$ --no-heading | awk '{print $2}')"
-    exec < $term
-
-    /sbin/service redis stop > /dev/null 2>&1 || :
-    /sbin/chkconfig --del redis
-fi
+# Install binaries
+install -p -D -m 755 src/%{name}-benchmark %{buildroot}%{_bindir}/%{name}-benchmark
+install -p -D -m 755 src/%{name}-cli %{buildroot}%{_bindir}/%{name}-cli
+install -p -D -m 755 src/%{name}-check-aof %{buildroot}%{_bindir}/%{name}-check-aof
+install -p -D -m 755 src/%{name}-check-dump %{buildroot}%{_bindir}/%{name}-check-dump
+install -p -D -m 755 src/%{name}-server %{buildroot}%{_sbindir}/%{name}-server
+# Install misc other
+install -p -D -m 644 %{SOURCE1} %{buildroot}%{_sysconfdir}/logrotate.d/%{name}
+install -p -D -m 755 %{SOURCE2} %{buildroot}%{_initrddir}/%{name}
+install -p -D -m 755 %{SOURCE3} %{buildroot}%{_sysconfdir}/%{name}.conf
+install -d -m 755 %{buildroot}%{_localstatedir}/lib/%{name}
+install -d -m 755 %{buildroot}%{_localstatedir}/log/%{name}
+install -d -m 755 %{buildroot}%{_localstatedir}/run/%{name}
 
 %post
 /sbin/chkconfig --add redis
 
-%clean
-%{__rm} -rf %{buildroot}
+%pre
+getent group redis &> /dev/null || groupadd -r redis &> /dev/null
+getent passwd redis &> /dev/null || \
+useradd -r -g redis -d %{_sharedstatedir}/redis -s /sbin/nologin \
+-c 'Redis Server' redis &> /dev/null
+exit 0
+
+%preun
+if [ $1 = 0 ]; then
+  /sbin/service redis stop &> /dev/null
+  /sbin/chkconfig --del redis &> /dev/null
+fi
 
 %files
-%defattr(-, root, root, 0755)
-%doc doc/*.html
-%{_sbindir}/redis-server
-%{_bindir}/redis-benchmark
-%{_bindir}/redis-cli
-%{_sysconfdir}/init.d/redis
-%config(noreplace) %{_sysconfdir}/redis.conf
-%{_sysconfdir}/logrotate.d/redis
-%dir %attr(0770,redis,redis) %{_localstatedir}/lib/redis
-%dir %attr(0755,redis,redis) %{_localstatedir}/log/redis
-%dir %attr(0755,redis,redis) %{_localstatedir}/run/redis
+%defattr(-,root,root,-)
+%doc 00-RELEASENOTES BUGS COPYING Changelog README doc/
+%config(noreplace) %{_sysconfdir}/logrotate.d/%{name}
+%config(noreplace) %{_sysconfdir}/%{name}.conf
+%dir %attr(0755, redis, root) %{_localstatedir}/lib/%{name}
+%dir %attr(0755, redis, root) %{_localstatedir}/log/%{name}
+%dir %attr(0755, redis, root) %{_localstatedir}/run/%{name}
+%{_bindir}/%{name}-*
+%{_sbindir}/%{name}-*
+%{_initrddir}/%{name}
 
 %changelog
-* Tue Jul 13 2010 - jay at causes dot com 2.0.0-rc2
-- upped to 2.0.0-rc2
+* Tue Mar 08 2011 Al Tobey <atobey@cisco.com> - 2.2.4-1
+- Update to redis 2.2.2
+- just include a whole config file rather than patching
 
-* Mon May 24 2010 - jay at causes dot com 1.3.9-2
-- moved pidfile back to /var/run/redis/redis.pid, so the redis
-  user can write to the pidfile.
-- Factored it out into %{pid_dir} (/var/run/redis), and
-  %{pid_file} (%{pid_dir}/redis.pid)
+* Sun Dec 19 2010 Silas Sewell <silas@sewell.ch> - 2.0.4-1
+- Update to redis 2.0.4
 
+* Tue Oct 19 2010 Silas Sewell <silas@sewell.ch> - 2.0.3-1
+- Update to redis 2.0.3
 
-* Wed May 05 2010 - brad at causes dot com 1.3.9-1
-- redis updated to version 1.3.9 (development release from GitHub)
-- extract config file from spec file
-- move pid file from /var/run/redis/redis.pid to just /var/run/redis.pid
-- move init file to /etc/init.d/ instead of /etc/rc.d/init.d/
+* Fri Oct 08 2010 Silas Sewell <silas@sewell.ch> - 2.0.2-1
+- Update to redis 2.0.2
+- Disable checks section for el5
 
-* Fri Sep 11 2009 - jpriebe at cbcnewmedia dot com 1.0-1
-- redis updated to version 1.0 stable
+* Fri Sep 11 2010 Silas Sewell <silas@sewell.ch> - 2.0.1-1
+- Update to redis 2.0.1
 
-* Mon Jun 01 2009 - jpriebe at cbcnewmedia dot com 0.100-1
-- Massive redis changes in moving from 0.09x to 0.100
-- removed log timestamp patch; this feature is now part of standard release
+* Sat Sep 04 2010 Silas Sewell <silas@sewell.ch> - 2.0.0-1
+- Update to redis 2.0.0
 
-* Tue May 12 2009 - jpriebe at cbcnewmedia dot com 0.096-1
-- A memory leak when passing more than 16 arguments to a command (including
-  itself).
-- A memory leak when loading compressed objects from disk is now fixed.
+* Thu Sep 02 2010 Silas Sewell <silas@sewell.ch> - 1.2.6-3
+- Add Fedora build flags
+- Send all scriplet output to /dev/null
+- Remove debugging flags
+- Add redis.conf check to init script
 
-* Mon May 04 2009 - jpriebe at cbcnewmedia dot com 0.094-2
-- Patch: applied patch to add timestamp to the log messages
-- moved redis-server to /usr/sbin
-- set %config(noreplace) on redis.conf to prevent config file overwrites
-  on upgrade
+* Mon Aug 16 2010 Silas Sewell <silas@sewell.ch> - 1.2.6-2
+- Don't compress man pages
+- Use patch to fix redis.conf
 
-* Fri May 01 2009 - jpriebe at cbcnewmedia dot com 0.094-1
-- Bugfix: 32bit integer overflow bug; there was a problem with datasets
-  consisting of more than 20,000,000 keys resulting in a lot of CPU usage
-  for iterated hash table resizing.
-
-* Wed Apr 29 2009 - jpriebe at cbcnewmedia dot com 0.093-2
-- added message to init.d script to warn user that shutdown may take a while
-
-* Wed Apr 29 2009 - jpriebe at cbcnewmedia dot com 0.093-1
-- version 0.093: fixed bug in save that would cause a crash
-- version 0.092: fix for bug in RANDOMKEY command
-
-* Fri Apr 24 2009 - jpriebe at cbcnewmedia dot com 0.091-3
-- change permissions on /var/log/redis and /var/run/redis to 755; this allows
-  non-root users to check the service status and to read the logs
-
-* Wed Apr 22 2009 - jpriebe at cbcnewmedia dot com 0.091-2
-- cleanup of temp*rdb files in /var/lib/redis after shutdown
-- better handling of pid file, especially with status
-
-* Tue Apr 14 2009 - jpriebe at cbcnewmedia dot com 0.091-1
-- Initial release.
+* Tue Jul 06 2010 Silas Sewell <silas@sewell.ch> - 1.2.6-1
+- Initial package
